@@ -4,6 +4,7 @@ import SpotifyWebApi from "spotify-web-api-node";
 import { CurrentlyPlayingTrack, Response } from "./interfaces";
 import { authorize, oauthClient } from "./oauth";
 import { runAppleScript } from "run-applescript";
+import { isSpotifyInstalled } from "./utils";
 
 const debugMode = false;
 
@@ -26,10 +27,12 @@ async function authorizeIfNeeded(): Promise<void> {
   }
 }
 
-export async function currentPlayingTrack(): Promise<string | SpotifyApi.ErrorObject | undefined> {
+const notPlayingErrorMessage = "Spotify Is Not Playing";
+
+export async function currentPlayingTrack(): Promise<string | undefined> {
   const script = `
   if application "Spotify" is not running then
-	return "Not playing"
+	return "${notPlayingErrorMessage}"
 end if
 
 property currentTrackId : "Unknown Track"
@@ -52,7 +55,7 @@ if playerState is "playing" then
 else if playerState is "paused" then
   return "{ \\"id\\": \\"" & currentTrackId & "\\", \\"name\\": \\"" & currentTrackName & "\\", \\"artist\\": \\"" & currentTrackArtist & "\\"}"
 else
-	return "Not playing"
+	return "${notPlayingErrorMessage}"
 end if`;
 
   try {
@@ -75,12 +78,27 @@ end if`;
 }
 
 export async function likeCurrentlyPlayingTrack(): Promise<Response<CurrentlyPlayingTrack> | undefined> {
+  const isInstalled = await isSpotifyInstalled();
+
+  if (!isInstalled) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "You don't have Spotify Installed",
+      message: "Liking songs that're playing on a different device is not supported yet",
+    });
+    return undefined;
+  }
+
   await authorizeIfNeeded();
   try {
     const response = await currentPlayingTrack();
+    const error = response as string;
+    if (error == notPlayingErrorMessage) {
+      return { error };
+    }
+
     const track = JSON.parse(response as string) as CurrentlyPlayingTrack;
-    const error = response as SpotifyApi.ErrorObject;
-    if (track.id) {
+    if (track && track.id) {
       const trackId = track.id.replace("spotify:track:", "");
       try {
         const response = await spotifyApi.addToMySavedTracks([trackId]);
@@ -90,10 +108,8 @@ export async function likeCurrentlyPlayingTrack(): Promise<Response<CurrentlyPla
       } catch (e: any) {
         return { error: (e as unknown as SpotifyApi.ErrorObject).message };
       }
-    } else if (error.message) {
-      return { error: error.message };
     } else {
-      return { error: "Playing song not found" };
+      return { error: "Playing song hasn't been found" };
     }
   } catch (e: any) {
     return { error: e };
